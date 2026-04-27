@@ -71,7 +71,7 @@ jobs:
     
     - name: Upload coverage artifacts
       if: matrix.build-type == 'debug'
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: coverage-report-${{ matrix.compiler }}
         path: coverage/report
@@ -80,7 +80,7 @@ jobs:
     
     - name: Upload test results
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: test-results-${{ matrix.compiler }}-${{ matrix.build-type }}
         path: |
