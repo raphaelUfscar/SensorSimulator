@@ -8,16 +8,83 @@ on:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
+    strategy:
+      matrix:
+        compiler: [gcc, clang]
+        build-type: [release, debug]
+    
     steps:
     - uses: actions/checkout@v4
-    - name: configure
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cppcheck gcov lcov
+        sudo apt-get install -y clang
+    
+    - name: Set compiler environment
+      run: |
+        if [ "${{ matrix.compiler }}" = "clang" ]; then
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "CXX=clang++" >> $GITHUB_ENV
+        else
+          echo "CC=gcc" >> $GITHUB_ENV
+          echo "CXX=g++" >> $GITHUB_ENV
+        fi
+    
+    - name: Configure build type
+      id: configure
+      run: |
+        if [ "${{ matrix.build-type }}" = "debug" ]; then
+          echo "CXXFLAGS=-g -O0 --coverage -Wall -Wextra -Werror" >> $GITHUB_ENV
+          echo "CFLAGS=-g -O0 --coverage -Wall -Wextra -Werror" >> $GITHUB_ENV
+        else
+          echo "CXXFLAGS=-O2 -Wall -Wextra -Werror" >> $GITHUB_ENV
+          echo "CFLAGS=-O2 -Wall -Wextra -Werror" >> $GITHUB_ENV
+        fi
+    
+    - name: Run static analysis (cppcheck)
+      continue-on-error: true
+      run: cppcheck --enable=all --suppress=missingIncludeSystem src/ || true
+    
+    - name: Configure
       run: ./configure
-    - name: make
+    
+    - name: Build
       run: make
-    - name: make check
-      run: make check
-    - name: make distcheck
+    
+    - name: Run tests with verbose output
+      run: make check VERBOSE=1
+    
+    - name: Run distribution check
       run: make distcheck
+    
+    - name: Generate coverage report (debug builds only)
+      if: matrix.build-type == 'debug'
+      continue-on-error: true
+      run: |
+        mkdir -p coverage
+        lcov --directory . --capture --output-file coverage/coverage.info
+        lcov --remove coverage/coverage.info '/usr/*' '*/test/*' --output-file coverage/coverage.info
+        genhtml coverage/coverage.info --output-directory coverage/report || true
+    
+    - name: Upload coverage artifacts
+      if: matrix.build-type == 'debug'
+      uses: actions/upload-artifact@v3
+      with:
+        name: coverage-report-${{ matrix.compiler }}
+        path: coverage/report
+        retention-days: 7
+      continue-on-error: true
+    
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-results-${{ matrix.compiler }}-${{ matrix.build-type }}
+        path: |
+          test-results/
+          *.log
+        retention-days: 7
+      continue-on-error: true
