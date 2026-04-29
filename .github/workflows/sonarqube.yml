@@ -1,29 +1,90 @@
+# Sonar C/C++ analysis for this PlatformIO (ESP32) project.
+#
+# GitHub setup:
+#   - Secret: SONAR_TOKEN (SonarQube Server or SonarQube Cloud token).
+#   - Variable: SONAR_PROJECT_KEY (required; must match the project key in Sonar).
+#   - Variable: SONAR_ORGANIZATION (SonarQube Cloud only; leave unset for SonarQube Server).
+#   - Variable: SONAR_HOST_URL (optional; defaults to SonarQube Cloud if unset — override for SonarQube Server).
+#
+# Older SonarQube Server (<10.6): swap compile_commands for build-wrapper-output in the Scan step —
+# https://docs.sonarsource.com/sonarqube-server/latest/analyzing-source-code/languages/c-family/
+
 name: SonarQube
+
 on:
   push:
     branches:
       - main
   pull_request:
-    types: [opened, synchronize, reopened]
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
-  build:
+  analyze:
     name: Build and analyze
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
+
     env:
-      BUILD_WRAPPER_OUT_DIR: build_wrapper_output_directory # Directory where build-wrapper output will be placed
+      BUILD_WRAPPER_OUT_DIR: build_wrapper_output
+      # Must match `[env]` in platformio.ini
+      PIO_ENV: lilygo-t-display-s3
+
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
-      - name: Install Build Wrapper
-        uses: SonarSource/sonarqube-scan-action/install-build-wrapper@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0
-      - name: Run Build Wrapper
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: >-
+            ${{ runner.os }}-platformio-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO Core
         run: |
-          build-wrapper-win-x86-64.exe --out-dir ${{ env.BUILD_WRAPPER_OUT_DIR }} <insert_your_clean_build_command>
+          python -m pip install --upgrade pip wheel
+          pip install "platformio>=6,<7"
+
+      - name: Install Build Wrapper
+        uses: SonarSource/sonarqube-scan-action/install-build-wrapper@v8.0.0
+        env:
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
+
+      - name: Build with PlatformIO (instrumented)
+        shell: bash
+        run: |
+          set -euo pipefail
+          build-wrapper-linux-x86-64 \
+            --out-dir "${BUILD_WRAPPER_OUT_DIR}" \
+            pio run -e "${PIO_ENV}"
+
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0
+        uses: SonarSource/sonarqube-scan-action@v8.0.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
         with:
-          args: >
-            --define "sonar.cfamily.compile-commands=${{ env.BUILD_WRAPPER_OUT_DIR }}/compile_commands.json"
+          args: >-
+            --define sonar.projectName=SensorSimulator
+            --define sonar.sources=src,include
+            --define sonar.sourceEncoding=UTF-8
+            --define sonar.exclusions=.pio/**,.vscode/**
+            --define sonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
+            --define sonar.cfamily.compile-commands=${{ github.workspace }}/${{ env.BUILD_WRAPPER_OUT_DIR }}/compile_commands.json
+            ${{ vars.SONAR_ORGANIZATION != '' && format('--define sonar.organization={0}', vars.SONAR_ORGANIZATION) || '' }}
