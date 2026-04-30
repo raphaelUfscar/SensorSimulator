@@ -2,7 +2,8 @@
 #
 # GitHub setup:
 #   - Secret: SONAR_TOKEN (SonarQube Server or SonarQube Cloud token).
-#   - Variable: SONAR_PROJECT_KEY (required; must match the project key in Sonar).
+#   - Variable or secret: SONAR_PROJECT_KEY (required; must match the project key in Sonar).
+#     If the key is empty, the workflow fails before the PlatformIO build (SonarCloud often documents this as a secret).
 #   - Variable: SONAR_ORGANIZATION (SonarQube Cloud only; leave unset for SonarQube Server).
 #   - Variable: SONAR_HOST_URL (optional; defaults to SonarQube Cloud if unset — override for SonarQube Server).
 #
@@ -42,6 +43,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Require Sonar project key
+        env:
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY || secrets.SONAR_PROJECT_KEY }}
+        run: |
+          if [ -z "${SONAR_PROJECT_KEY}" ]; then
+            echo "::error::Set repository variable SONAR_PROJECT_KEY or secret SONAR_PROJECT_KEY to your Sonar project key (SonarQube Cloud: Project key on the project overview page)."
+            exit 1
+          fi
 
       - uses: actions/setup-python@v5
         with:
@@ -84,6 +94,6 @@ jobs:
             --define sonar.sources=src,include
             --define sonar.sourceEncoding=UTF-8
             --define sonar.exclusions=.pio/**,.vscode/**
-            --define sonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
+            --define sonar.projectKey=${{ vars.SONAR_PROJECT_KEY || secrets.SONAR_PROJECT_KEY }}
             --define sonar.cfamily.compile-commands=${{ github.workspace }}/${{ env.BUILD_WRAPPER_OUT_DIR }}/compile_commands.json
             ${{ vars.SONAR_ORGANIZATION != '' && format('--define sonar.organization={0}', vars.SONAR_ORGANIZATION) || '' }}
