@@ -1,4 +1,8 @@
-#include <Arduino.h>
+#ifdef UNIT_TEST
+#include "mock_arduino.h" // Include mock for native tests
+#else
+#include <Arduino.h>      // Original include for ESP32 build
+#endif
 
 #include "sensors.h"
 #include "hal.h"
@@ -39,4 +43,3 @@ bool Sensor_ExternalTemp_Read(SensorData_t* data) {
     data->value = raw_voltage * 100.0f;
     return true;
 }
-

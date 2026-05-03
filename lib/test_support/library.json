@@ -1,0 +1,10 @@
+{
+  "name": "test_support",
+  "version": "0.0.0",
+  "description": "Native test stubs/mocks for host builds",
+  "build": {
+    "srcDir": "src",
+    "includeDir": "include"
+  }
+}
+
