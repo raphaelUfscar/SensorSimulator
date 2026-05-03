@@ -7,6 +7,11 @@
 #   - Variable: SONAR_ORGANIZATION (SonarQube Cloud only; leave unset for SonarQube Server).
 #   - Variable: SONAR_HOST_URL (optional; defaults to SonarQube Cloud if unset — override for SonarQube Server).
 #
+# SonarQube Cloud — avoid duplicate analysis:
+#   If you see "CI analysis while Automatic Analysis is enabled", pick ONE path:
+#   go to https://sonarcloud.io → Project → Administration → Analysis Method and disable
+#   Automatic Analysis (keep CI-based analysis for this workflow). You cannot run both.
+#
 # Older SonarQube Server (<10.6): swap compile_commands for build-wrapper-output in the Scan step —
 # https://docs.sonarsource.com/sonarqube-server/latest/analyzing-source-code/languages/c-family/
 
