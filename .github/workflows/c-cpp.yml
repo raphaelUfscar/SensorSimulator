@@ -1,6 +1,6 @@
 # Continuous integration for this PlatformIO (ESP32 / Arduino) firmware project.
 
-name: PlatformIO CI
+name: PlatformIO Static analysis and build
 
 on:
   push:
