@@ -41,7 +41,9 @@ jobs:
         run: sudo apt-get install -y lcov
 
       - name: Run Unit Tests (Native)
-        run: pio test -e native
+        run: pio test -e native -vvv
+
+
 
       - name: Process Coverage
         run: |
