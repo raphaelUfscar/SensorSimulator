@@ -1,95 +1,157 @@
-# SensorSimulator (LilyGO T-Display S3)
+# SensorSimulator
 
-SensorSimulator is a small **ESP32-S3** firmware project that periodically reads simulated/board-provided sensor values, **encodes them into a compact binary frame**, streams them over **USB Serial**, and (optionally) shows the latest readings on the board’s built-in TFT display.
+Firmware for the LilyGO T-Display S3 that reads a small set of sensor values, encodes them into a compact binary frame, sends the frame over USB Serial, and optionally renders the latest values on the built-in TFT display.
 
-## Framework / build system
+## Project At A Glance
 
-- **Build system**: PlatformIO
-- **Framework**: Arduino (ESP32 core)
-- **Target board**: `lilygo-t-display-s3`
-- **MCU**: Espressif **ESP32‑S3**
+- Build system: PlatformIO
+- Framework: Arduino for ESP32
+- Main target: `lilygo-t-display-s3`
+- Host test target: `native`
+- Board: LilyGO T-Display S3 / ESP32-S3
+- Serial speed: `115200`
+- Sample and display interval: `2000 ms`
 
-Project configuration lives in `SensorSimulator/platformio.ini`.
+The main configuration is in `platformio.ini`.
 
-## Architecture (separation of concerns)
+## Repository Layout
 
-Code is organized into small modules so each concern is isolated and testable.
-
-### Modules / layers
-
-- **App orchestration**
-  - `SensorSimulator/src/main.cpp`
-  - Owns `setup()` / `loop()` and coordinates: read sensors → encode frame → write to USB → refresh UI
-
-- **Configuration and shared types**
-  - `SensorSimulator/include/app_config.h`: global constants (frame bytes, intervals, feature flags)
-  - `SensorSimulator/include/types.h`: `SensorData_t`, `SensorBatch_t`, `SensorId`, `UnitId`
-
-- **HAL (hardware abstraction)**
-  - `SensorSimulator/include/hal_board.h`: board GPIO mapping used by HAL
-  - `SensorSimulator/include/hal.h` + `SensorSimulator/src/hal.cpp`
-    - `HW_Read_InternalTemp()`
-    - `HW_Read_ADC(channel)`
-
-- **Sensors (service layer)**
-  - `SensorSimulator/include/sensors.h` + `SensorSimulator/src/sensors.cpp`
-  - Builds `SensorData_t` records with `sensor_id`, `timestamp`, `unit_id`, `value`
-
-- **Protocol (binary framing)**
-  - `SensorSimulator/include/protocol.h` + `SensorSimulator/src/protocol.cpp`
-  - `Protocol_Encode(batch, buffer, length)` produces a single binary frame suitable for a PC receiver (C#).
-
-- **Display / UI**
-  - `SensorSimulator/include/display.h` + `SensorSimulator/src/display.cpp`
-  - Uses **TFT_eSPI** to show sensor values on the built-in TFT.
-  - LCD power/backlight are enabled before TFT init (pins used by the LilyGO T-Display S3).
-
-## Data protocol (USB Serial stream)
-
-The firmware sends **binary** (not text). A receiver should treat incoming bytes as a stream and parse frames.
-
-### Frame format
-
+```text
+include/              Public project headers and shared types
+src/                  Firmware modules
+lib/test_support/     Native test mocks/stubs
+test/                 PlatformIO Unity tests
+platformio.ini        PlatformIO environments and build flags
 ```
-START(0xAA) | COUNT(1) | [SENSOR_RECORD x COUNT] | CHECKSUM(1) | END(0x55)
+
+This project keeps documentation centralized in this root README. The previous folder-level README files were PlatformIO boilerplate and did not add project-specific guidance.
+
+## Firmware Architecture
+
+- `src/main.cpp` coordinates the firmware loop: read sensors, encode a frame, write it to USB Serial, and refresh the display.
+- `include/app_config.h` defines protocol bytes, feature flags, and timing constants.
+- `include/types.h` defines `SensorData_t`, `SensorBatch_t`, `SensorId`, and `UnitId`.
+- `src/hal.cpp` contains the hardware abstraction for internal temperature and ADC reads.
+- `src/sensors.cpp` converts HAL readings into typed sensor records.
+- `src/protocol.cpp` encodes sensor batches into the binary wire format.
+- `src/display.cpp` initializes and updates the LilyGO TFT display when `USE_DISPLAY` is enabled.
+
+## Sensor Values
+
+The firmware currently emits four records per sample:
+
+| Sensor | ID | Unit | Source |
+| --- | ---: | --- | --- |
+| Internal temperature | `0` | Celsius | `temperatureRead()` |
+| Voltage | `1` | Volt | ADC channel `1` |
+| Current | `2` | Amp | ADC channel `2`, converted with 2.5 V offset and 0.1 V/A sensitivity |
+| External temperature | `3` | Celsius | ADC channel `3`, converted as `voltage * 100` |
+
+The board ADC pin mapping lives in `include/hal_board.h`.
+
+## Binary Serial Protocol
+
+The firmware writes binary frames to USB Serial. A PC receiver should parse bytes as a stream, not as text.
+
+```text
+START(0xAA) | COUNT(1) | SENSOR_RECORD x COUNT | CHECKSUM(1) | END(0x55)
 ```
 
 Each `SENSOR_RECORD` is 10 bytes:
 
+```text
+sensor_id(1) | timestamp_ms(4, little-endian) | unit_id(1) | value_float(4, little-endian IEEE-754)
 ```
-sensor_id(1) | timestamp_ms(4, little-endian) | unit_id(1) | value_float(4, little-endian IEEE754)
+
+Total frame length is:
+
+```text
+4 + COUNT * 10
 ```
 
-Total frame length:
+The checksum is an 8-bit wrapping sum of `START_BYTE`, `COUNT`, and all sensor record bytes. It excludes the checksum byte itself and `END_BYTE`.
 
-- `1 + 1 + (COUNT * 10) + 1 + 1` bytes
-- i.e. **`4 + COUNT*10`**
+Recommended receiver behavior:
 
-### Checksum
+- Buffer incoming serial bytes.
+- Resynchronize on `0xAA`.
+- Use `COUNT` to calculate the expected frame size.
+- Verify `END_BYTE == 0x55`.
+- Recalculate and compare the checksum.
+- If validation fails, discard bytes until the next `0xAA`.
 
-Current checksum is an 8-bit sum (mod 256) of:
+## Display Configuration
 
-- `START_BYTE`, `COUNT`, and all payload bytes
-- **excluding** the checksum byte itself and the `END_BYTE`
+Display support is enabled by default through `USE_DISPLAY` in `include/app_config.h`.
 
-## Display configuration (T-Display S3)
+The PlatformIO board environment uses `TFT_eSPI` with the LilyGO T-Display S3 setup:
 
-The project uses the upstream `TFT_eSPI` library with the LilyGO T‑Display S3 setup file:
+```ini
+-D USER_SETUP_LOADED=1
+-include $PROJECT_LIBDEPS_DIR/$PIOENV/TFT_eSPI/User_Setups/Setup206_LilyGo_T_Display_S3.h
+```
 
-- `User_Setups/Setup206_LilyGo_T_Display_S3.h`
+To compile without display support, add or override this build flag:
 
-This is selected in `platformio.ini` via:
+```ini
+-D USE_DISPLAY=0
+```
 
-- `-D USER_SETUP_LOADED=1`
-- `-include .../Setup206_LilyGo_T_Display_S3.h`
+## Build, Upload, And Monitor
 
-## Typical receiver behavior (PC / C#)
+Install PlatformIO Core or use the PlatformIO extension in VS Code.
 
-On the PC side, implement a small stream parser:
+Build the firmware:
 
-- Buffer bytes from the serial port
-- Resync on `0xAA`
-- Use `COUNT` to compute expected frame size
-- Validate `END_BYTE == 0x55` and checksum
-- If invalid, discard until the next `0xAA`
+```powershell
+pio run -e lilygo-t-display-s3
+```
 
+Upload to the board:
+
+```powershell
+pio run -e lilygo-t-display-s3 -t upload
+```
+
+Open the serial monitor:
+
+```powershell
+pio device monitor -b 115200
+```
+
+Because the stream is binary, the monitor may show unreadable characters. Use a receiver/parser when validating protocol frames.
+
+## Tests
+
+The test suite uses PlatformIO's Unity runner with the `native` environment.
+
+Run all host tests:
+
+```powershell
+pio test -e native
+```
+
+Run one test suite:
+
+```powershell
+pio test -e native -f test_protocol
+pio test -e native -f test_sensors
+```
+
+The native environment is configured with:
+
+- `test_build_src = true`, so production modules are compiled into tests.
+- `UNIT_TEST`, so sensor code uses the Arduino test shim instead of the board Arduino headers.
+- `build_src_filter`, which excludes Arduino-only firmware entrypoints and drivers: `main.cpp`, `display.cpp`, and `hal.cpp`.
+- `lib/test_support`, which provides mocks for `millis()`, `HW_Read_InternalTemp()`, and `HW_Read_ADC()`.
+
+Current coverage:
+
+- `test/test_protocol` checks frame structure, checksum calculation, and little-endian float encoding.
+- `test/test_sensors` checks sensor IDs, timestamps, units, and conversion formulas using mocked HAL inputs.
+
+## Adding Tests
+
+Add new Unity tests under `test/<suite_name>/test_<suite_name>.cpp`.
+
+For logic that can run on the host, keep hardware calls behind small abstractions and provide mock implementations in `lib/test_support`. If a module depends directly on Arduino-only libraries or board peripherals, either isolate that dependency or exclude it from the `native` environment and test the pure logic around it.
