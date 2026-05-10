@@ -1,29 +1,51 @@
-name: PlatformIO Unit Tests and Coverage
+name: PlatformIO CI
 
+# Run the regular CI path on pushes to main and on pull requests targeting main.
+# This workflow owns the fast project health checks: native unit tests, an HTML
+# coverage artifact, cppcheck, and the real ESP32 firmware build.
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
 
+# The workflow only needs read access to source code and workflow artifacts.
 permissions:
   contents: read
   actions: read
 
 jobs:
   build_and_test:
+    name: Tests, coverage, static analysis, and firmware build
     runs-on: ubuntu-latest
 
+    env:
+      # Must match the host test environment in platformio.ini.
+      PIO_TEST_ENV: native
+
+      # Must match the firmware environment in platformio.ini.
+      PIO_ENV: lilygo-t-display-s3
+
     steps:
-      - uses: actions/checkout@v4
+      # Checkout with full history so coverage tools and later diagnostics can
+      # resolve file paths consistently.
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Python
+      # PlatformIO is installed with pip, so pin the runner to a known Python
+      # version for consistent dependency resolution.
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # Cache PlatformIO packages and pip downloads. The cache key changes when
+      # platformio.ini changes because that file controls board packages,
+      # environments, and library dependencies.
       - name: Cache PlatformIO
         uses: actions/cache@v4
         with:
@@ -32,33 +54,47 @@ jobs:
             ~/.cache/pip
           key: ${{ runner.os }}-platformio-${{ hashFiles('platformio.ini') }}
 
-      - name: Install PlatformIO Core
+      # Install PlatformIO for builds/tests, lcov for the human-readable HTML
+      # coverage report, and cppcheck for a lightweight static-analysis pass.
+      - name: Install PlatformIO and analysis tools
         run: |
+          sudo apt-get update
+          sudo apt-get install -y lcov cppcheck
           python -m pip install --upgrade pip wheel
-          pip install "platformio>=6"
+          pip install "platformio>=6,<7"
 
-      - name: Install lcov
-        run: sudo apt-get install -y lcov
+      # Run host-side Unity tests. The native environment enables gcov
+      # instrumentation and uses lib/test_support mocks instead of board hardware.
+      - name: Run unit tests
+        run: pio test -e "${PIO_TEST_ENV}" -vvv
 
-      - name: Run Unit Tests (Native)
-        run: pio test -e native -vvv
-
-
-
-      - name: Process Coverage
+      # Collect gcov data into lcov format and generate an HTML coverage report.
+      # Test files, PlatformIO internals, and generated test runner files are
+      # removed so the report focuses on project code.
+      - name: Process coverage
         run: |
           lcov --directory . --capture --ignore-errors empty --output-file coverage.info
-          # Remove system headers and test files from the report
           lcov --remove coverage.info '*/test/*' '*/.pio/*' '*/test_*.cpp' --output-file coverage.info
           genhtml coverage.info --output-directory coverage-report
 
-      - name: Upload Coverage Report
+      # Keep the HTML report as a workflow artifact so it can be downloaded and
+      # inspected from the GitHub Actions run summary.
+      - name: Upload coverage report
         uses: actions/upload-artifact@v4
         with:
           name: code-coverage-report
           path: coverage-report/
 
-      - name: Verify Build (ESP32)
-        run: pio run -e lilygo-t-display-s3
-        # This ensures that hardware-specific code still compiles 
-        # even if it's not covered by native tests.
+      # Run cppcheck over project sources and headers. continue-on-error keeps
+      # cppcheck advisory for now, while compiler errors in the firmware build
+      # still fail the workflow.
+      - name: Static analysis with cppcheck
+        continue-on-error: true
+        run: |
+          cppcheck --enable=all --suppress=missingIncludeSystem -I include src/ include/
+
+      # Build the actual ESP32 firmware after native tests. This catches issues
+      # in Arduino-only code such as main.cpp, display.cpp, hal.cpp, and TFT_eSPI
+      # integration that the native test environment intentionally excludes.
+      - name: Verify firmware build
+        run: pio run -e "${PIO_ENV}"
