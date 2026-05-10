@@ -1,7 +1,8 @@
-# CodeQL for GitHub-hosted runners. C/C++ uses a traced PlatformIO build (ESP32 / Arduino).
-
 name: CodeQL
 
+# Run GitHub CodeQL on pushes to main, on pull requests targeting main, and once
+# a week. The scheduled run helps catch newly published queries even when the
+# project code has not changed.
 on:
   push:
     branches:
@@ -12,6 +13,8 @@ on:
   schedule:
     - cron: "26 5 * * 5"
 
+# Do not cancel older CodeQL runs. Security analysis can be useful even if a
+# newer commit arrives while the current scan is still running.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -20,6 +23,9 @@ jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ${{ (matrix.language == 'swift' && 'macos-latest') || 'ubuntu-latest' }}
+
+    # CodeQL needs security-events: write to upload SARIF results. The other
+    # permissions are the minimum read scopes needed by the action.
     permissions:
       actions: read
       contents: read
@@ -30,27 +36,36 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Analyze GitHub Actions workflow files without a build.
           - language: actions
             build-mode: none
+
+          # Analyze C/C++ by tracing the real PlatformIO firmware build.
           - language: c-cpp
             build-mode: manual
 
     env:
-      # Must match `[env]` in platformio.ini
+      # Must match the firmware environment in platformio.ini.
       PIO_ENV: lilygo-t-display-s3
 
     steps:
+      # Checkout with full history so CodeQL has complete source context.
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Python and PlatformIO (C/C++ only)
+      # Only the C/C++ matrix entry needs Python because PlatformIO is installed
+      # through pip before the traced build.
+      - name: Setup Python for PlatformIO
         if: matrix.language == 'c-cpp'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # Cache PlatformIO packages and pip downloads for the C/C++ build. The
+      # cache key follows platformio.ini because that file controls board
+      # packages, libraries, and environments.
       - name: Cache PlatformIO packages
         if: matrix.language == 'c-cpp'
         uses: actions/cache@v4
@@ -61,25 +76,32 @@ jobs:
           key: >-
             ${{ runner.os }}-platformio-${{ hashFiles('platformio.ini') }}
 
+      # Install PlatformIO only for the C/C++ analysis entry. The GitHub Actions
+      # language entry uses build-mode none and does not compile anything.
       - name: Install PlatformIO Core
         if: matrix.language == 'c-cpp'
         run: |
           python -m pip install --upgrade pip wheel
           pip install "platformio>=6,<7"
 
+      # Initialize CodeQL for the current matrix language. The C/C++ entry uses
+      # manual build mode so the next step provides the traced compilation.
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
 
-      - name: Build firmware (traced; PlatformIO)
+      # Compile the firmware while CodeQL tracing is active. This gives the
+      # analyzer the actual ESP32/Arduino compile commands and include paths.
+      - name: Build firmware for CodeQL
         if: matrix.language == 'c-cpp'
         shell: bash
         run: |
           set -euo pipefail
           pio run -e "${PIO_ENV}"
 
+      # Upload CodeQL results for the current language to GitHub code scanning.
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
         with:
