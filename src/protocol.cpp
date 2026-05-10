@@ -5,7 +5,24 @@
 #include "protocol.h"
 #include "app_config.h"
 
-void Protocol_Encode(const SensorBatch_t* batch, uint8_t* buffer, size_t* length) {
+bool Protocol_Encode(const SensorBatch_t* batch, uint8_t* buffer, size_t buffer_capacity, size_t* length) {
+    if (length != nullptr) {
+        *length = 0;
+    }
+
+    if (batch == nullptr || buffer == nullptr || length == nullptr) {
+        return false;
+    }
+
+    if (batch->count > MAX_SENSORS) {
+        return false;
+    }
+
+    const size_t required_length = 4U + (static_cast<size_t>(batch->count) * 10U);
+    if (buffer_capacity < required_length) {
+        return false;
+    }
+
     size_t pos = 0;
     buffer[pos++] = START_BYTE;
     buffer[pos++] = batch->count;
@@ -47,5 +64,10 @@ void Protocol_Encode(const SensorBatch_t* batch, uint8_t* buffer, size_t* length
     buffer[pos++] = checksum;
     buffer[pos++] = END_BYTE;
     *length = pos;
+    return true;
+}
+
+void Protocol_Encode(const SensorBatch_t* batch, uint8_t* buffer, size_t* length) {
+    (void)Protocol_Encode(batch, buffer, static_cast<size_t>(-1), length);
 }
 
